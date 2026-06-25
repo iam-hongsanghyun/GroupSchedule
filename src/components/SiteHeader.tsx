@@ -8,8 +8,11 @@ export async function SiteHeader() {
     data: { user },
   } = await supabase.auth.getUser();
 
+  const meta = user?.user_metadata ?? {};
   const name =
-    (user?.user_metadata?.display_name as string | undefined) ??
+    (meta.display_name as string | undefined) ??
+    (meta.full_name as string | undefined) ??
+    (meta.name as string | undefined) ??
     user?.email?.split("@")[0];
 
   return (

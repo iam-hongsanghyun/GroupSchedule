@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { login } from "@/lib/auth-actions";
 import { createClient } from "@/lib/supabase/server";
 import { SubmitButton } from "@/components/SubmitButton";
+import { GoogleButton } from "@/components/GoogleButton";
 
 export default async function LoginPage({
   searchParams,
@@ -35,7 +36,16 @@ export default async function LoginPage({
         </p>
       )}
 
-      <form action={login} className="mt-6 space-y-4">
+      <div className="mt-6">
+        <GoogleButton label="Log in with Google" />
+      </div>
+      <div className="my-5 flex items-center gap-3 text-xs text-slate-400">
+        <span className="h-px flex-1 bg-slate-200" />
+        or use email
+        <span className="h-px flex-1 bg-slate-200" />
+      </div>
+
+      <form action={login} className="space-y-4">
         <div>
           <label className="mb-1 block text-sm font-medium text-slate-700">
             Email
