@@ -22,10 +22,24 @@ interface Props {
   ev: EventConfig;
   initialResponses: ParticipantResponse[];
   currentUserName: string | null;
+  currentUserEmail: string | null;
   isLoggedIn: boolean;
   isOwner: boolean;
   myParticipantId: string | null;
 }
+
+/** Distinct per-person colors (rgb triplets). "You" is always indigo. */
+const ME_RGB = "99,102,241";
+const PALETTE = [
+  "245,158,11", // amber
+  "236,72,153", // pink
+  "20,184,166", // teal
+  "168,85,247", // violet
+  "249,115,22", // orange
+  "6,182,212", // cyan
+  "132,204,22", // lime
+  "239,68,68", // red
+];
 
 interface StoredResponse {
   participant_id: string;
@@ -75,6 +89,7 @@ export function SchedulerClient({
   ev,
   initialResponses,
   currentUserName,
+  currentUserEmail,
   isLoggedIn,
   isOwner,
   myParticipantId,
@@ -103,7 +118,7 @@ export function SchedulerClient({
   );
   const [meetUrl, setMeetUrl] = useState<string | null>(ev.meet_url);
   const [scheduling, setScheduling] = useState(false);
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(isLoggedIn && currentUserEmail ? currentUserEmail : "");
   const [linkInput, setLinkInput] = useState("");
 
   const localTz = useMemo(() => localTimezone(), []);
@@ -173,6 +188,39 @@ export function SchedulerClient({
     for (const r of effective) m[r.participant_id] = r.display_name;
     return m;
   }, [effective]);
+
+  // Assign each responder a stable color; "you" is always indigo.
+  const colorById = useMemo(() => {
+    const m: Record<string, string> = { me: ME_RGB };
+    let i = 0;
+    for (const r of responses) {
+      if (r.participant_id === myPid) {
+        m[r.participant_id] = ME_RGB;
+      } else {
+        m[r.participant_id] = PALETTE[i % PALETTE.length];
+        i++;
+      }
+    }
+    return m;
+  }, [responses, myPid]);
+
+  // Other people's saved availability, for the colored read-only grid layer.
+  const peopleForGrid = useMemo(
+    () =>
+      responses
+        .filter((r) => r.participant_id !== myPid)
+        .map((r) => ({
+          id: r.participant_id,
+          color: colorById[r.participant_id] ?? PALETTE[0],
+          blocks: r.blocks.map((b) => ({
+            start: Date.parse(b.start),
+            end: Date.parse(b.end),
+          })),
+        })),
+    [responses, myPid, colorById],
+  );
+
+  const overlapHighlight = useMemo(() => overlap.filter((s) => s.count >= 2), [overlap]);
 
   const refresh = useCallback(async () => {
     const { data } = await supabase.rpc("get_event_responses", { p_slug: ev.share_slug });
@@ -332,11 +380,32 @@ export function SchedulerClient({
     setSavedAt(Date.now());
   }
 
+  async function removeResponse() {
+    if (!confirm("Remove your response from this event?")) return;
+    await supabase.rpc("delete_my_response", {
+      p_slug: ev.share_slug,
+      p_edit_token: isLoggedIn ? null : editToken,
+    });
+    if (!isLoggedIn) {
+      try {
+        localStorage.removeItem(`gs_resp_${ev.share_slug}`);
+      } catch {
+        /* ignore */
+      }
+      setName("");
+      setStarted(false);
+    }
+    setMyBlocks(() => []);
+    setMyPid(null);
+    setEditToken(null);
+    setSavedAt(null);
+    await refresh();
+  }
+
   const durationLabel =
     ev.meeting_duration_minutes >= 60
       ? `${ev.meeting_duration_minutes / 60}h`
       : `${ev.meeting_duration_minutes}m`;
-  const showTzToggle = localTz !== ev.organizer_timezone;
   const navBtn =
     "rounded-md border border-slate-300 bg-white px-2 py-1 text-sm text-slate-600 hover:bg-slate-50";
 
@@ -451,34 +520,36 @@ export function SchedulerClient({
               </button>
             </div>
 
-            {showTzToggle && (
-              <div className="flex rounded-lg border border-slate-300 p-0.5 text-xs">
-                <button
-                  type="button"
-                  onClick={() => setDisplayTz(localTz)}
-                  className={`rounded-md px-2.5 py-1 ${displayTz === localTz ? "bg-indigo-600 text-white" : "text-slate-600"}`}
-                >
-                  My time
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDisplayTz(ev.organizer_timezone)}
-                  className={`rounded-md px-2.5 py-1 ${displayTz === ev.organizer_timezone ? "bg-indigo-600 text-white" : "text-slate-600"}`}
-                >
-                  Organizer
-                </button>
-              </div>
-            )}
+            <div className="flex rounded-lg border border-slate-300 p-0.5 text-xs">
+              <button
+                type="button"
+                onClick={() => setDisplayTz(localTz)}
+                className={`rounded-md px-2.5 py-1 ${displayTz === localTz ? "bg-indigo-600 text-white" : "text-slate-600"}`}
+              >
+                My time
+              </button>
+              <button
+                type="button"
+                onClick={() => setDisplayTz(ev.organizer_timezone)}
+                className={`rounded-md px-2.5 py-1 ${displayTz === ev.organizer_timezone ? "bg-indigo-600 text-white" : "text-slate-600"}`}
+              >
+                Organizer
+              </button>
+            </div>
           </div>
 
-          <div className="mb-2 flex items-center gap-4 text-xs text-slate-500">
+          <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
             <span className="flex items-center gap-1.5">
               <span className="h-3 w-3 rounded-sm bg-indigo-500/40 ring-1 ring-indigo-500" />
-              Your availability
+              You
             </span>
             <span className="flex items-center gap-1.5">
-              <span className="h-3 w-3 rounded-sm bg-emerald-500/50" />
-              Everyone&apos;s overlap
+              <span className="h-3 w-3 rounded-sm bg-amber-400/40 ring-1 ring-amber-400" />
+              Others (one color each)
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="h-3 w-3 rounded-sm border-2 border-emerald-600 bg-emerald-500/40" />
+              Overlap (2+)
             </span>
             {googleStatus === "connected" && (
               <span className="flex items-center gap-1.5">
@@ -500,8 +571,9 @@ export function SchedulerClient({
             columns={columns}
             displayTz={displayTz}
             refDateISO={weekStart}
-            overlap={overlap}
+            overlap={overlapHighlight}
             maxCount={effective.length || 1}
+            people={peopleForGrid}
             myBlocks={myBlocks}
             setMyBlocks={setMyBlocks}
             editable={editable}
@@ -542,19 +614,33 @@ export function SchedulerClient({
               </div>
             ) : (
               <div className="mt-3 space-y-3">
-                <input
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="Your name"
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
-                />
-                <input
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  type="email"
-                  placeholder="Email (optional — for a calendar invite)"
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
-                />
+                {isLoggedIn ? (
+                  <div className="rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                    Marking availability as{" "}
+                    <span className="font-medium text-slate-900">{name}</span>
+                    {currentUserEmail && (
+                      <span className="block text-xs text-slate-400">
+                        Calendar invites go to {currentUserEmail}
+                      </span>
+                    )}
+                  </div>
+                ) : (
+                  <>
+                    <input
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      placeholder="Your name"
+                      className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                    />
+                    <input
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      type="email"
+                      placeholder="Email (optional — for a calendar invite)"
+                      className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                    />
+                  </>
+                )}
                 <div className="flex items-center justify-between text-xs text-slate-500">
                   <span>
                     {myBlocks.length} block{myBlocks.length === 1 ? "" : "s"} marked
@@ -580,6 +666,15 @@ export function SchedulerClient({
                 </button>
                 {savedAt && !saving && (
                   <p className="text-center text-xs text-emerald-600">Saved ✓</p>
+                )}
+                {myPid && (
+                  <button
+                    type="button"
+                    onClick={removeResponse}
+                    className="w-full text-center text-xs text-slate-400 hover:text-red-600"
+                  >
+                    Remove my response
+                  </button>
                 )}
               </div>
             )}
@@ -636,7 +731,11 @@ export function SchedulerClient({
             selectedStart={finalized?.start ?? null}
             onPick={pickTime}
           />
-          <ParticipantList responses={responses} myParticipantId={myPid} />
+          <ParticipantList
+            responses={responses}
+            myParticipantId={myPid}
+            colorById={colorById}
+          />
 
           <div className="rounded-xl border border-slate-200 bg-white p-4">
             <h2 className="font-semibold text-slate-900">Invite others</h2>

@@ -5,9 +5,10 @@ import type { ParticipantResponse } from "@/lib/types";
 interface Props {
   responses: ParticipantResponse[];
   myParticipantId: string | null;
+  colorById?: Record<string, string>;
 }
 
-export function ParticipantList({ responses, myParticipantId }: Props) {
+export function ParticipantList({ responses, myParticipantId, colorById = {} }: Props) {
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4">
       <h2 className="font-semibold text-slate-900">
@@ -20,13 +21,17 @@ export function ParticipantList({ responses, myParticipantId }: Props) {
         <ul className="mt-3 space-y-2">
           {responses.map((r) => {
             const isMe = r.participant_id === myParticipantId;
+            const rgb = colorById[r.participant_id] ?? "99,102,241";
             return (
               <li
                 key={r.participant_id}
                 className="flex items-center justify-between text-sm"
               >
                 <span className="flex items-center gap-2">
-                  <span className="h-2.5 w-2.5 rounded-full bg-indigo-500" />
+                  <span
+                    className="h-2.5 w-2.5 rounded-full"
+                    style={{ backgroundColor: `rgb(${rgb})` }}
+                  />
                   <span className="font-medium text-slate-700">
                     {r.display_name}
                     {isMe && (

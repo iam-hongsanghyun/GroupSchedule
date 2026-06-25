@@ -25,6 +25,7 @@ export default async function SharePage({
   } = await supabase.auth.getUser();
 
   let currentUserName: string | null = null;
+  const currentUserEmail: string | null = user?.email ?? null;
   let myParticipantId: string | null = null;
   let isOwner = false;
 
@@ -58,6 +59,7 @@ export default async function SharePage({
       ev={event}
       initialResponses={responses}
       currentUserName={currentUserName}
+      currentUserEmail={currentUserEmail}
       isLoggedIn={!!user}
       isOwner={isOwner}
       myParticipantId={myParticipantId}

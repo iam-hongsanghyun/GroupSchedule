@@ -44,17 +44,12 @@ interface Props {
   scrollToMinute?: number;
   busy?: { start: number; end: number }[];
   finalized?: { start: number; end: number } | null;
+  people?: { id: string; color: string; blocks: { start: number; end: number }[] }[];
 }
 
-/**
- * Overlap shading: a single person available is barely visible; once two or
- * more overlap it brightens sharply, and "everyone" is the most saturated.
- */
-function segColor(count: number, maxCount: number): string {
-  if (count <= 1) return "rgba(16,185,129,0.08)"; // single availability — faint
-  const t = maxCount > 1 ? (count - 1) / (maxCount - 1) : 1; // 0 at two → 1 at everyone
-  const op = 0.34 + 0.5 * t; // 0.34 … 0.84
-  return `rgba(16,185,129,${op})`; // emerald-500
+/** Overlap fill opacity grows a little with each additional person. */
+function overlapOpacity(count: number): number {
+  return Math.min(0.28 + 0.12 * (count - 2), 0.62);
 }
 
 function newId(seed: number): string {
@@ -76,6 +71,7 @@ export function WeekGrid({
   scrollToMinute = 480,
   busy = [],
   finalized = null,
+  people = [],
 }: Props) {
   const windowMin = ev.day_end_minute - ev.day_start_minute;
   const H = (windowMin / 60) * HOUR_PX;
@@ -294,29 +290,27 @@ export function WeekGrid({
                 );
               })}
 
-              {/* Overlap (read-only) */}
-              {overlap.map((seg, i) => {
-                const clip = clipToColumn(seg.start, seg.end, col);
-                if (!clip) return null;
-                const top = clip.topFrac * H;
-                const height = (clip.bottomFrac - clip.topFrac) * H;
-                const everyone = maxCount >= 2 && seg.count === maxCount;
-                return (
-                  <div
-                    key={`o-${i}`}
-                    className={`pointer-events-none absolute inset-x-0.5 overflow-hidden rounded-sm ${
-                      everyone ? "ring-1 ring-inset ring-emerald-600" : ""
-                    }`}
-                    style={{ top, height, background: segColor(seg.count, maxCount) }}
-                  >
-                    {height > 16 && (
-                      <span className="absolute right-1 top-0.5 text-[10px] font-semibold text-emerald-900/80">
-                        {everyone ? `all ${seg.count}` : seg.count}
-                      </span>
-                    )}
-                  </div>
-                );
-              })}
+              {/* Other people's availability (read-only, one color each) */}
+              {people.map((person) =>
+                person.blocks.map((blk, i) => {
+                  const clip = clipToColumn(blk.start, blk.end, col);
+                  if (!clip) return null;
+                  const top = clip.topFrac * H;
+                  const height = Math.max((clip.bottomFrac - clip.topFrac) * H, 3);
+                  return (
+                    <div
+                      key={`p-${person.id}-${i}`}
+                      className="pointer-events-none absolute inset-x-0.5 rounded-md"
+                      style={{
+                        top,
+                        height,
+                        backgroundColor: `rgba(${person.color},0.30)`,
+                        border: `1px solid rgba(${person.color},0.75)`,
+                      }}
+                    />
+                  );
+                }),
+              )}
 
               {/* My editable blocks (each lives in exactly one day-column) */}
               {myBlocks.map((b) => {
@@ -360,6 +354,31 @@ export function WeekGrid({
                 );
               })}
 
+              {/* Overlap of 2+ people — emphasized, on top of everything */}
+              {overlap.map((seg, i) => {
+                if (seg.count < 2) return null;
+                const clip = clipToColumn(seg.start, seg.end, col);
+                if (!clip) return null;
+                const top = clip.topFrac * H;
+                const height = (clip.bottomFrac - clip.topFrac) * H;
+                const everyone = maxCount >= 2 && seg.count === maxCount;
+                return (
+                  <div
+                    key={`o-${i}`}
+                    className={`pointer-events-none absolute inset-x-0 z-20 overflow-hidden rounded-md border-2 ${
+                      everyone ? "border-emerald-700" : "border-emerald-600"
+                    }`}
+                    style={{ top, height, background: `rgba(16,185,129,${overlapOpacity(seg.count)})` }}
+                  >
+                    {height > 14 && (
+                      <span className="absolute right-1 top-0.5 text-[10px] font-bold text-emerald-950">
+                        {everyone ? `all ${seg.count}` : seg.count}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+
               {/* Finalized meeting time (read-only highlight) */}
               {finalized &&
                 (() => {
@@ -369,7 +388,7 @@ export function WeekGrid({
                   const height = Math.max((clip.bottomFrac - clip.topFrac) * H, 14);
                   return (
                     <div
-                      className="pointer-events-none absolute inset-x-0.5 z-10 overflow-hidden rounded-md bg-indigo-600 px-1 py-0.5 text-[10px] font-semibold text-white shadow ring-2 ring-indigo-300"
+                      className="pointer-events-none absolute inset-x-0.5 z-30 overflow-hidden rounded-md bg-indigo-600 px-1 py-0.5 text-[10px] font-semibold text-white shadow ring-2 ring-indigo-300"
                       style={{ top, height }}
                     >
                       ★ Scheduled
