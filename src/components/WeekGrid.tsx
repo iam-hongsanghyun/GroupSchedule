@@ -43,6 +43,7 @@ interface Props {
   editable: boolean;
   scrollToMinute?: number;
   busy?: { start: number; end: number }[];
+  finalized?: { start: number; end: number } | null;
 }
 
 /**
@@ -74,6 +75,7 @@ export function WeekGrid({
   editable,
   scrollToMinute = 480,
   busy = [],
+  finalized = null,
 }: Props) {
   const windowMin = ev.day_end_minute - ev.day_start_minute;
   const H = (windowMin / 60) * HOUR_PX;
@@ -357,6 +359,23 @@ export function WeekGrid({
                   </div>
                 );
               })}
+
+              {/* Finalized meeting time (read-only highlight) */}
+              {finalized &&
+                (() => {
+                  const clip = clipToColumn(finalized.start, finalized.end, col);
+                  if (!clip) return null;
+                  const top = clip.topFrac * H;
+                  const height = Math.max((clip.bottomFrac - clip.topFrac) * H, 14);
+                  return (
+                    <div
+                      className="pointer-events-none absolute inset-x-0.5 z-10 overflow-hidden rounded-md bg-indigo-600 px-1 py-0.5 text-[10px] font-semibold text-white shadow ring-2 ring-indigo-300"
+                      style={{ top, height }}
+                    >
+                      ★ Scheduled
+                    </div>
+                  );
+                })()}
             </div>
           ))}
         </div>

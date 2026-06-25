@@ -7,9 +7,19 @@ interface Props {
   windows: SuggestedWindow[];
   displayTz: string;
   nameById: Record<string, string>;
+  canPick?: boolean;
+  selectedStart?: number | null;
+  onPick?: (w: SuggestedWindow) => void;
 }
 
-export function SuggestedTimes({ windows, displayTz, nameById }: Props) {
+export function SuggestedTimes({
+  windows,
+  displayTz,
+  nameById,
+  canPick = false,
+  selectedStart = null,
+  onPick,
+}: Props) {
   if (windows.length === 0) {
     return (
       <div className="rounded-xl border border-slate-200 bg-white p-4">
@@ -31,6 +41,7 @@ export function SuggestedTimes({ windows, displayTz, nameById }: Props) {
       <ol className="mt-3 space-y-2">
         {windows.slice(0, 8).map((w, i) => {
           const everyone = w.count === w.total;
+          const isSelected = selectedStart != null && w.start === selectedStart;
           const names = w.participantIds
             .map((id) => nameById[id])
             .filter(Boolean)
@@ -38,7 +49,9 @@ export function SuggestedTimes({ windows, displayTz, nameById }: Props) {
           return (
             <li
               key={`${w.start}-${i}`}
-              className="rounded-lg border border-slate-200 p-3"
+              className={`rounded-lg border p-3 ${
+                isSelected ? "border-indigo-500 bg-indigo-50" : "border-slate-200"
+              }`}
             >
               <div className="flex items-center justify-between">
                 <span className="text-sm font-medium text-slate-900">
@@ -63,6 +76,19 @@ export function SuggestedTimes({ windows, displayTz, nameById }: Props) {
                 <p className="mt-1 truncate text-xs text-slate-400" title={names}>
                   {names}
                 </p>
+              )}
+              {canPick && (
+                <button
+                  type="button"
+                  onClick={() => onPick?.(w)}
+                  className={`mt-2 w-full rounded-md px-3 py-1.5 text-xs font-medium ${
+                    isSelected
+                      ? "bg-indigo-600 text-white"
+                      : "border border-indigo-300 text-indigo-700 hover:bg-indigo-50"
+                  }`}
+                >
+                  {isSelected ? "Scheduled ✓" : "Pick this time"}
+                </button>
               )}
             </li>
           );

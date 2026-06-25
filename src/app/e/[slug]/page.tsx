@@ -26,6 +26,7 @@ export default async function SharePage({
 
   let currentUserName: string | null = null;
   let myParticipantId: string | null = null;
+  let isOwner = false;
 
   if (user) {
     currentUserName =
@@ -34,6 +35,14 @@ export default async function SharePage({
       (user.user_metadata?.name as string | undefined) ??
       user.email?.split("@")[0] ??
       null;
+
+    // RLS returns the row only to the owner, so a hit means this user owns it.
+    const { data: ownerRow } = await supabase
+      .from("events")
+      .select("id")
+      .eq("id", event.id)
+      .maybeSingle();
+    isOwner = !!ownerRow;
 
     const { data: mine } = await supabase
       .from("participants")
@@ -50,6 +59,7 @@ export default async function SharePage({
       initialResponses={responses}
       currentUserName={currentUserName}
       isLoggedIn={!!user}
+      isOwner={isOwner}
       myParticipantId={myParticipantId}
     />
   );

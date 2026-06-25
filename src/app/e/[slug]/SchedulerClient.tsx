@@ -7,13 +7,14 @@ import { WeekGrid, type EditBlock } from "@/components/WeekGrid";
 import { SuggestedTimes } from "@/components/SuggestedTimes";
 import { ParticipantList } from "@/components/ParticipantList";
 import { CopyButton } from "@/components/CopyButton";
-import { computeOverlap, suggestWindows } from "@/lib/scheduling";
+import { computeOverlap, suggestWindows, type SuggestedWindow } from "@/lib/scheduling";
 import {
   weekColumns,
   startOfWeekISO,
   addDaysISO,
   weekLabel,
   localTimezone,
+  formatRange,
 } from "@/lib/time";
 import type { Block, EventConfig, ParticipantResponse } from "@/lib/types";
 
@@ -22,6 +23,7 @@ interface Props {
   initialResponses: ParticipantResponse[];
   currentUserName: string | null;
   isLoggedIn: boolean;
+  isOwner: boolean;
   myParticipantId: string | null;
 }
 
@@ -59,6 +61,7 @@ export function SchedulerClient({
   initialResponses,
   currentUserName,
   isLoggedIn,
+  isOwner,
   myParticipantId,
 }: Props) {
   const supabase = useMemo(() => createClient(), []);
@@ -78,6 +81,11 @@ export function SchedulerClient({
   const [googleStatus, setGoogleStatus] = useState<
     "unknown" | "connected" | "disconnected" | "loading"
   >("unknown");
+  const [finalized, setFinalized] = useState<{ start: number; end: number } | null>(
+    ev.finalized_start && ev.finalized_end
+      ? { start: Date.parse(ev.finalized_start), end: Date.parse(ev.finalized_end) }
+      : null,
+  );
 
   const localTz = useMemo(() => localTimezone(), []);
   const columns = useMemo(() => weekColumns(weekStart, ev), [weekStart, ev]);
@@ -203,6 +211,26 @@ export function SchedulerClient({
     if (oauthError) setGoogleStatus("disconnected");
   }
 
+  async function pickTime(w: SuggestedWindow) {
+    const next = { start: w.start, end: w.end };
+    setFinalized(next);
+    await supabase
+      .from("events")
+      .update({
+        finalized_start: new Date(w.start).toISOString(),
+        finalized_end: new Date(w.end).toISOString(),
+      })
+      .eq("id", ev.id);
+  }
+
+  async function clearFinalized() {
+    setFinalized(null);
+    await supabase
+      .from("events")
+      .update({ finalized_start: null, finalized_end: null })
+      .eq("id", ev.id);
+  }
+
   async function save() {
     setError(null);
     if (!name.trim()) {
@@ -261,6 +289,28 @@ export function SchedulerClient({
           Target {durationLabel} meeting · drag the calendar to mark when you&apos;re free
         </p>
       </header>
+
+      {finalized && (
+        <div className="mb-5 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3">
+          <p className="text-sm font-semibold text-indigo-900">
+            ★ Scheduled: {formatRange(finalized.start, finalized.end, displayTz)}
+            {!isOwner && (
+              <span className="ml-2 font-normal text-indigo-700">
+                (set by the organizer)
+              </span>
+            )}
+          </p>
+          {isOwner && (
+            <button
+              type="button"
+              onClick={clearFinalized}
+              className="rounded-md border border-indigo-300 bg-white px-3 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-100"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+      )}
 
       <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
         <div>
@@ -348,6 +398,7 @@ export function SchedulerClient({
             setMyBlocks={setMyBlocks}
             editable={editable}
             busy={googleBusy}
+            finalized={finalized}
           />
           <p className="mt-2 text-xs text-slate-400">
             Times in <span className="font-medium">{displayTz}</span>. Scroll the grid
@@ -462,7 +513,14 @@ export function SchedulerClient({
           </div>
           )}
 
-          <SuggestedTimes windows={suggestions} displayTz={displayTz} nameById={nameById} />
+          <SuggestedTimes
+            windows={suggestions}
+            displayTz={displayTz}
+            nameById={nameById}
+            canPick={isOwner}
+            selectedStart={finalized?.start ?? null}
+            onPick={pickTime}
+          />
           <ParticipantList responses={responses} myParticipantId={myPid} />
 
           <div className="rounded-xl border border-slate-200 bg-white p-4">
