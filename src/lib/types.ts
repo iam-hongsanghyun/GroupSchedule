@@ -13,6 +13,8 @@ export interface EventConfig {
   organizer_timezone: string; // IANA
   finalized_start: string | null;
   finalized_end: string | null;
+  meet_url: string | null;
+  gcal_event_id: string | null;
   created_at: string;
   updated_at: string;
 }

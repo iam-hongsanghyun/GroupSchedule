@@ -31,6 +31,7 @@ interface StoredResponse {
   participant_id: string;
   edit_token: string;
   name: string;
+  email?: string;
 }
 
 function newId(seed: number): string {
@@ -86,6 +87,9 @@ export function SchedulerClient({
       ? { start: Date.parse(ev.finalized_start), end: Date.parse(ev.finalized_end) }
       : null,
   );
+  const [meetUrl, setMeetUrl] = useState<string | null>(ev.meet_url);
+  const [scheduling, setScheduling] = useState(false);
+  const [email, setEmail] = useState("");
 
   const localTz = useMemo(() => localTimezone(), []);
   const columns = useMemo(() => weekColumns(weekStart, ev), [weekStart, ev]);
@@ -103,6 +107,7 @@ export function SchedulerClient({
           setMyPid(stored.participant_id);
           setEditToken(stored.edit_token);
           if (stored.name) setName(stored.name);
+          if (stored.email) setEmail(stored.email);
           setStarted(true);
         }
       } catch {
@@ -162,37 +167,29 @@ export function SchedulerClient({
   // Fetch the signed-in user's Google free/busy for the visible week, using the
   // provider token Supabase stores after a Google OAuth sign-in.
   const loadGoogleBusy = useCallback(async () => {
-    if (!columns.length) return;
+    if (!columns.length || !isLoggedIn) {
+      setGoogleStatus("disconnected");
+      return;
+    }
     try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      const token = session?.provider_token;
-      if (!token) {
-        setGoogleStatus("disconnected");
-        setGoogleBusy([]);
-        return;
-      }
       const timeMin = new Date(columns[0].startMs).toISOString();
       const timeMax = new Date(columns[columns.length - 1].endMs).toISOString();
-      const res = await fetch("https://www.googleapis.com/calendar/v3/freeBusy", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ timeMin, timeMax, items: [{ id: "primary" }] }),
-      });
-      if (!res.ok) {
+      const res = await fetch(
+        `/api/calendar?timeMin=${encodeURIComponent(timeMin)}&timeMax=${encodeURIComponent(timeMax)}`,
+      );
+      const json = await res.json();
+      if (!json.connected) {
         setGoogleStatus("disconnected");
         setGoogleBusy([]);
         return;
       }
-      const json = await res.json();
-      const busy = (json?.calendars?.primary?.busy ?? []) as { start: string; end: string }[];
+      const busy = (json.busy ?? []) as { start: string; end: string }[];
       setGoogleBusy(busy.map((b) => ({ start: Date.parse(b.start), end: Date.parse(b.end) })));
       setGoogleStatus("connected");
     } catch {
       setGoogleStatus("disconnected");
     }
-  }, [supabase, columns]);
+  }, [columns, isLoggedIn]);
 
   useEffect(() => {
     loadGoogleBusy();
@@ -203,7 +200,8 @@ export function SchedulerClient({
     const { error: oauthError } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
-        scopes: "https://www.googleapis.com/auth/calendar.readonly",
+        scopes:
+          "https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events",
         redirectTo: `${window.location.origin}/auth/callback?next=/e/${ev.share_slug}`,
         queryParams: { access_type: "offline", prompt: "consent" },
       },
@@ -212,23 +210,56 @@ export function SchedulerClient({
   }
 
   async function pickTime(w: SuggestedWindow) {
-    const next = { start: w.start, end: w.end };
-    setFinalized(next);
+    setFinalized({ start: w.start, end: w.end });
+    setMeetUrl(null); // time changed → any prior Meet link is stale
     await supabase
       .from("events")
       .update({
         finalized_start: new Date(w.start).toISOString(),
         finalized_end: new Date(w.end).toISOString(),
+        meet_url: null,
+        gcal_event_id: null,
       })
       .eq("id", ev.id);
   }
 
   async function clearFinalized() {
     setFinalized(null);
+    setMeetUrl(null);
     await supabase
       .from("events")
-      .update({ finalized_start: null, finalized_end: null })
+      .update({
+        finalized_start: null,
+        finalized_end: null,
+        meet_url: null,
+        gcal_event_id: null,
+      })
       .eq("id", ev.id);
+  }
+
+  async function createMeet() {
+    setScheduling(true);
+    try {
+      const res = await fetch("/api/schedule", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ slug: ev.share_slug }),
+      });
+      const json = await res.json();
+      if (res.ok && json.meet_url) {
+        setMeetUrl(json.meet_url);
+      } else if (json.error === "connect_calendar") {
+        await connectGoogleCalendar();
+      } else {
+        setError(
+          json.error === "google_error"
+            ? "Google couldn't create the event — make sure you granted calendar access."
+            : json.error ?? "Could not create the meeting.",
+        );
+      }
+    } finally {
+      setScheduling(false);
+    }
   }
 
   async function save() {
@@ -244,6 +275,7 @@ export function SchedulerClient({
       p_timezone: displayTz,
       p_blocks: editableToBlocks(myBlocks),
       p_edit_token: isLoggedIn ? null : editToken,
+      p_email: email.trim() || null,
     });
     if (rpcError || !data) {
       setError(rpcError?.message ?? "Could not save your availability.");
@@ -261,6 +293,7 @@ export function SchedulerClient({
             participant_id: res.participant_id,
             edit_token: res.edit_token,
             name: name.trim(),
+            email: email.trim() || undefined,
           } satisfies StoredResponse),
         );
       } catch {
@@ -300,15 +333,38 @@ export function SchedulerClient({
               </span>
             )}
           </p>
-          {isOwner && (
-            <button
-              type="button"
-              onClick={clearFinalized}
-              className="rounded-md border border-indigo-300 bg-white px-3 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-100"
-            >
-              Clear
-            </button>
-          )}
+          <div className="flex items-center gap-2">
+            {meetUrl ? (
+              <a
+                href={meetUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700"
+              >
+                Join Google Meet
+              </a>
+            ) : (
+              isOwner && (
+                <button
+                  type="button"
+                  onClick={createMeet}
+                  disabled={scheduling}
+                  className="rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-60"
+                >
+                  {scheduling ? "Creating…" : "Create Google Meet & send invites"}
+                </button>
+              )
+            )}
+            {isOwner && (
+              <button
+                type="button"
+                onClick={clearFinalized}
+                className="rounded-md border border-indigo-300 bg-white px-3 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-100"
+              >
+                Clear
+              </button>
+            )}
+          </div>
         </div>
       )}
 
@@ -438,6 +494,13 @@ export function SchedulerClient({
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder="Your name"
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                />
+                <input
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  type="email"
+                  placeholder="Email (optional — for a calendar invite)"
                   className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
                 />
                 <div className="flex items-center justify-between text-xs text-slate-500">
