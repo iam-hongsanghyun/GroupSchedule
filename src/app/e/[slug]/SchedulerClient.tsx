@@ -520,22 +520,28 @@ export function SchedulerClient({
               </button>
             </div>
 
-            <div className="flex rounded-lg border border-slate-300 p-0.5 text-xs">
-              <button
-                type="button"
-                onClick={() => setDisplayTz(localTz)}
-                className={`rounded-md px-2.5 py-1 ${displayTz === localTz ? "bg-indigo-600 text-white" : "text-slate-600"}`}
-              >
-                My time
-              </button>
-              <button
-                type="button"
-                onClick={() => setDisplayTz(ev.organizer_timezone)}
-                className={`rounded-md px-2.5 py-1 ${displayTz === ev.organizer_timezone ? "bg-indigo-600 text-white" : "text-slate-600"}`}
-              >
-                Organizer
-              </button>
-            </div>
+            {localTz === ev.organizer_timezone ? (
+              <span className="text-xs text-slate-500">
+                Times in {localTz}
+              </span>
+            ) : (
+              <div className="flex rounded-lg border border-slate-300 p-0.5 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setDisplayTz(localTz)}
+                  className={`rounded-md px-2.5 py-1 ${displayTz === localTz ? "bg-indigo-600 text-white" : "text-slate-600"}`}
+                >
+                  My time
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDisplayTz(ev.organizer_timezone)}
+                  className={`rounded-md px-2.5 py-1 ${displayTz === ev.organizer_timezone ? "bg-indigo-600 text-white" : "text-slate-600"}`}
+                >
+                  Organizer
+                </button>
+              </div>
+            )}
           </div>
 
           <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
