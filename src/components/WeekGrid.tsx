@@ -42,11 +42,17 @@ interface Props {
   setMyBlocks: (updater: (prev: EditBlock[]) => EditBlock[]) => void;
   editable: boolean;
   scrollToMinute?: number;
+  busy?: { start: number; end: number }[];
 }
 
+/**
+ * Overlap shading: a single person available is barely visible; once two or
+ * more overlap it brightens sharply, and "everyone" is the most saturated.
+ */
 function segColor(count: number, maxCount: number): string {
-  const t = maxCount > 0 ? count / maxCount : 0;
-  const op = 0.16 + 0.5 * t;
+  if (count <= 1) return "rgba(16,185,129,0.08)"; // single availability — faint
+  const t = maxCount > 1 ? (count - 1) / (maxCount - 1) : 1; // 0 at two → 1 at everyone
+  const op = 0.34 + 0.5 * t; // 0.34 … 0.84
   return `rgba(16,185,129,${op})`; // emerald-500
 }
 
@@ -67,6 +73,7 @@ export function WeekGrid({
   setMyBlocks,
   editable,
   scrollToMinute = 480,
+  busy = [],
 }: Props) {
   const windowMin = ev.day_end_minute - ev.day_start_minute;
   const H = (windowMin / 60) * HOUR_PX;
@@ -258,21 +265,51 @@ export function WeekGrid({
                 />
               ))}
 
+              {/* Google Calendar busy times (read-only, behind everything) */}
+              {busy.map((b, i) => {
+                const clip = clipToColumn(b.start, b.end, col);
+                if (!clip) return null;
+                const top = clip.topFrac * H;
+                const height = (clip.bottomFrac - clip.topFrac) * H;
+                return (
+                  <div
+                    key={`b-${i}`}
+                    className="pointer-events-none absolute inset-x-0 rounded-sm"
+                    style={{
+                      top,
+                      height,
+                      backgroundColor: "rgba(100,116,139,0.10)",
+                      backgroundImage:
+                        "repeating-linear-gradient(45deg, rgba(100,116,139,0.22) 0, rgba(100,116,139,0.22) 1px, transparent 1px, transparent 6px)",
+                    }}
+                  >
+                    {height > 16 && (
+                      <span className="absolute left-1 top-0.5 text-[9px] font-medium text-slate-500">
+                        busy
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+
               {/* Overlap (read-only) */}
               {overlap.map((seg, i) => {
                 const clip = clipToColumn(seg.start, seg.end, col);
                 if (!clip) return null;
                 const top = clip.topFrac * H;
                 const height = (clip.bottomFrac - clip.topFrac) * H;
+                const everyone = maxCount >= 2 && seg.count === maxCount;
                 return (
                   <div
                     key={`o-${i}`}
-                    className="pointer-events-none absolute inset-x-0.5 overflow-hidden rounded-sm"
+                    className={`pointer-events-none absolute inset-x-0.5 overflow-hidden rounded-sm ${
+                      everyone ? "ring-1 ring-inset ring-emerald-600" : ""
+                    }`}
                     style={{ top, height, background: segColor(seg.count, maxCount) }}
                   >
                     {height > 16 && (
-                      <span className="absolute right-1 top-0.5 text-[10px] font-semibold text-emerald-900/70">
-                        {seg.count}
+                      <span className="absolute right-1 top-0.5 text-[10px] font-semibold text-emerald-900/80">
+                        {everyone ? `all ${seg.count}` : seg.count}
                       </span>
                     )}
                   </div>

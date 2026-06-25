@@ -74,6 +74,10 @@ export function SchedulerClient({
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [googleBusy, setGoogleBusy] = useState<{ start: number; end: number }[]>([]);
+  const [googleStatus, setGoogleStatus] = useState<
+    "unknown" | "connected" | "disconnected" | "loading"
+  >("unknown");
 
   const localTz = useMemo(() => localTimezone(), []);
   const columns = useMemo(() => weekColumns(weekStart, ev), [weekStart, ev]);
@@ -146,6 +150,58 @@ export function SchedulerClient({
     const { data } = await supabase.rpc("get_event_responses", { p_slug: ev.share_slug });
     setResponses((data ?? []) as ParticipantResponse[]);
   }, [supabase, ev.share_slug]);
+
+  // Fetch the signed-in user's Google free/busy for the visible week, using the
+  // provider token Supabase stores after a Google OAuth sign-in.
+  const loadGoogleBusy = useCallback(async () => {
+    if (!columns.length) return;
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const token = session?.provider_token;
+      if (!token) {
+        setGoogleStatus("disconnected");
+        setGoogleBusy([]);
+        return;
+      }
+      const timeMin = new Date(columns[0].startMs).toISOString();
+      const timeMax = new Date(columns[columns.length - 1].endMs).toISOString();
+      const res = await fetch("https://www.googleapis.com/calendar/v3/freeBusy", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ timeMin, timeMax, items: [{ id: "primary" }] }),
+      });
+      if (!res.ok) {
+        setGoogleStatus("disconnected");
+        setGoogleBusy([]);
+        return;
+      }
+      const json = await res.json();
+      const busy = (json?.calendars?.primary?.busy ?? []) as { start: string; end: string }[];
+      setGoogleBusy(busy.map((b) => ({ start: Date.parse(b.start), end: Date.parse(b.end) })));
+      setGoogleStatus("connected");
+    } catch {
+      setGoogleStatus("disconnected");
+    }
+  }, [supabase, columns]);
+
+  useEffect(() => {
+    loadGoogleBusy();
+  }, [loadGoogleBusy]);
+
+  async function connectGoogleCalendar() {
+    setGoogleStatus("loading");
+    const { error: oauthError } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: {
+        scopes: "https://www.googleapis.com/auth/calendar.readonly",
+        redirectTo: `${window.location.origin}/auth/callback?next=/e/${ev.share_slug}`,
+        queryParams: { access_type: "offline", prompt: "consent" },
+      },
+    });
+    if (oauthError) setGoogleStatus("disconnected");
+  }
 
   async function save() {
     setError(null);
@@ -266,6 +322,19 @@ export function SchedulerClient({
               <span className="h-3 w-3 rounded-sm bg-emerald-500/50" />
               Everyone&apos;s overlap
             </span>
+            {googleStatus === "connected" && (
+              <span className="flex items-center gap-1.5">
+                <span
+                  className="h-3 w-3 rounded-sm"
+                  style={{
+                    backgroundColor: "rgba(100,116,139,0.12)",
+                    backgroundImage:
+                      "repeating-linear-gradient(45deg, rgba(100,116,139,0.4) 0, rgba(100,116,139,0.4) 1px, transparent 1px, transparent 4px)",
+                  }}
+                />
+                Your busy times
+              </span>
+            )}
           </div>
 
           <WeekGrid
@@ -278,6 +347,7 @@ export function SchedulerClient({
             myBlocks={myBlocks}
             setMyBlocks={setMyBlocks}
             editable={editable}
+            busy={googleBusy}
           />
           <p className="mt-2 text-xs text-slate-400">
             Times in <span className="font-medium">{displayTz}</span>. Scroll the grid
@@ -345,6 +415,47 @@ export function SchedulerClient({
                 {savedAt && !saving && (
                   <p className="text-center text-xs text-emerald-600">Saved ✓</p>
                 )}
+              </div>
+            )}
+          </div>
+
+          <div className="rounded-xl border border-slate-200 bg-white p-4">
+            <h2 className="font-semibold text-slate-900">Your Google Calendar</h2>
+            {googleStatus === "connected" ? (
+              <div className="mt-2 space-y-1">
+                <p className="text-sm text-emerald-600">
+                  ✓ Showing your busy times on the grid.
+                </p>
+                <p className="text-xs text-slate-500">
+                  {googleBusy.length} event{googleBusy.length === 1 ? "" : "s"} this week ·{" "}
+                  <button
+                    type="button"
+                    onClick={loadGoogleBusy}
+                    className="underline hover:text-slate-700"
+                  >
+                    Refresh
+                  </button>
+                </p>
+              </div>
+            ) : (
+              <div className="mt-2 space-y-2">
+                <p className="text-xs text-slate-500">
+                  See your existing events here so you can mark availability around them.
+                </p>
+                <button
+                  type="button"
+                  onClick={connectGoogleCalendar}
+                  disabled={googleStatus === "loading"}
+                  className="flex w-full items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                >
+                  <svg width="16" height="16" viewBox="0 0 18 18" aria-hidden>
+                    <path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.92c1.7-1.57 2.68-3.88 2.68-6.62z" />
+                    <path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.8.54-1.84.86-3.04.86-2.34 0-4.32-1.58-5.03-3.7H.96v2.34A9 9 0 0 0 9 18z" />
+                    <path fill="#FBBC05" d="M3.97 10.72A5.4 5.4 0 0 1 3.68 9c0-.6.1-1.18.29-1.72V4.94H.96A9 9 0 0 0 0 9c0 1.45.35 2.82.96 4.06l3.01-2.34z" />
+                    <path fill="#EA4335" d="M9 3.58c1.32 0 2.5.45 3.44 1.35l2.58-2.58C13.46.89 11.43 0 9 0A9 9 0 0 0 .96 4.94l3.01 2.34C4.68 5.16 6.66 3.58 9 3.58z" />
+                  </svg>
+                  {googleStatus === "loading" ? "Connecting…" : "Connect Google Calendar"}
+                </button>
               </div>
             )}
           </div>

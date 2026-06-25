@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { DateTime } from "luxon";
 import { createClient } from "@/lib/supabase/server";
 import { CopyButton } from "@/components/CopyButton";
+import { DeleteEventButton } from "@/components/DeleteEventButton";
 import type { EventSummary } from "@/lib/types";
 
 function dateRange(start: string, end: string): string {
@@ -77,6 +78,7 @@ export default async function DashboardPage() {
                 >
                   Open
                 </Link>
+                <DeleteEventButton id={ev.id} title={ev.title} />
               </div>
             </li>
           ))}
