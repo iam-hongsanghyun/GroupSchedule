@@ -49,32 +49,41 @@ export async function POST(request: Request) {
     .filter((e): e is string => !!e)
     .map((email) => ({ email }));
 
+  // If a meeting link is already set (e.g. a pasted Zoom/Teams URL), invite
+  // with that link; otherwise generate a Google Meet for the event.
+  const existingLink: string | null = ev.meet_url ?? null;
   const requestId = `gs-${ev.id}-${Date.parse(ev.finalized_start)}`
     .replace(/[^a-zA-Z0-9-]/g, "")
     .slice(0, 64);
 
-  const body = {
+  const description = [ev.description, existingLink ? `Join: ${existingLink}` : null]
+    .filter(Boolean)
+    .join("\n\n");
+
+  const body: Record<string, unknown> = {
     summary: ev.title,
-    description: ev.description ?? undefined,
+    description: description || undefined,
     start: { dateTime: new Date(ev.finalized_start).toISOString(), timeZone: "UTC" },
     end: { dateTime: new Date(ev.finalized_end).toISOString(), timeZone: "UTC" },
     attendees,
-    conferenceData: {
-      createRequest: {
-        requestId,
-        conferenceSolutionKey: { type: "hangoutsMeet" },
-      },
-    },
   };
+  if (existingLink) {
+    body.location = existingLink;
+  } else {
+    body.conferenceData = {
+      createRequest: { requestId, conferenceSolutionKey: { type: "hangoutsMeet" } },
+    };
+  }
 
-  const res = await fetch(
-    "https://www.googleapis.com/calendar/v3/calendars/primary/events?conferenceDataVersion=1&sendUpdates=all",
-    {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    },
-  );
+  const endpoint = existingLink
+    ? "https://www.googleapis.com/calendar/v3/calendars/primary/events?sendUpdates=all"
+    : "https://www.googleapis.com/calendar/v3/calendars/primary/events?conferenceDataVersion=1&sendUpdates=all";
+
+  const res = await fetch(endpoint, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
   if (!res.ok) {
     const detail = (await res.text()).slice(0, 300);
     return NextResponse.json({ error: "google_error", detail }, { status: 502 });
@@ -82,6 +91,7 @@ export async function POST(request: Request) {
 
   const created = await res.json();
   const meetUrl: string | null =
+    existingLink ??
     created.hangoutLink ??
     created.conferenceData?.entryPoints?.find(
       (e: { entryPointType?: string; uri?: string }) => e.entryPointType === "video",

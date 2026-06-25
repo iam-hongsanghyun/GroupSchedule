@@ -57,6 +57,20 @@ function blocksToEditable(blocks: Block[]): EditBlock[] {
     .filter((b) => b.endMs > b.startMs);
 }
 
+/** Guess the meeting provider from a URL, for the Join button label. */
+function providerLabel(url: string): string {
+  try {
+    const host = new URL(url).hostname;
+    if (host.includes("zoom")) return "Zoom";
+    if (host.includes("teams.")) return "Teams";
+    if (host.includes("meet.google")) return "Google Meet";
+    if (host.includes("webex")) return "Webex";
+    return "meeting";
+  } catch {
+    return "meeting";
+  }
+}
+
 export function SchedulerClient({
   ev,
   initialResponses,
@@ -90,6 +104,7 @@ export function SchedulerClient({
   const [meetUrl, setMeetUrl] = useState<string | null>(ev.meet_url);
   const [scheduling, setScheduling] = useState(false);
   const [email, setEmail] = useState("");
+  const [linkInput, setLinkInput] = useState("");
 
   const localTz = useMemo(() => localTimezone(), []);
   const columns = useMemo(() => weekColumns(weekStart, ev), [weekStart, ev]);
@@ -237,6 +252,18 @@ export function SchedulerClient({
       .eq("id", ev.id);
   }
 
+  async function saveMeetingLink() {
+    const url = linkInput.trim();
+    if (!/^https?:\/\//i.test(url)) {
+      setError("Enter a valid link starting with http:// or https://");
+      return;
+    }
+    setError(null);
+    setMeetUrl(url);
+    setLinkInput("");
+    await supabase.from("events").update({ meet_url: url }).eq("id", ev.id);
+  }
+
   async function createMeet() {
     setScheduling(true);
     try {
@@ -324,47 +351,72 @@ export function SchedulerClient({
       </header>
 
       {finalized && (
-        <div className="mb-5 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3">
-          <p className="text-sm font-semibold text-indigo-900">
-            ★ Scheduled: {formatRange(finalized.start, finalized.end, displayTz)}
-            {!isOwner && (
-              <span className="ml-2 font-normal text-indigo-700">
-                (set by the organizer)
-              </span>
-            )}
-          </p>
-          <div className="flex items-center gap-2">
-            {meetUrl ? (
-              <a
-                href={meetUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700"
-              >
-                Join Google Meet
-              </a>
-            ) : (
-              isOwner && (
+        <div className="mb-5 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm font-semibold text-indigo-900">
+              ★ Scheduled: {formatRange(finalized.start, finalized.end, displayTz)}
+              {!isOwner && (
+                <span className="ml-2 font-normal text-indigo-700">
+                  (set by the organizer)
+                </span>
+              )}
+            </p>
+            <div className="flex items-center gap-2">
+              {meetUrl && (
+                <a
+                  href={meetUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700"
+                >
+                  Join {providerLabel(meetUrl)}
+                </a>
+              )}
+              {isOwner && (
+                <button
+                  type="button"
+                  onClick={clearFinalized}
+                  className="rounded-md border border-indigo-300 bg-white px-3 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-100"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+          </div>
+
+          {isOwner && (
+            <>
+              <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-indigo-200 pt-3">
+                <input
+                  value={linkInput}
+                  onChange={(e) => setLinkInput(e.target.value)}
+                  placeholder="Paste a Zoom / Teams / Webex link"
+                  className="min-w-[200px] flex-1 rounded-md border border-indigo-200 bg-white px-3 py-1.5 text-xs outline-none focus:border-indigo-500"
+                />
+                <button
+                  type="button"
+                  onClick={saveMeetingLink}
+                  className="rounded-md border border-indigo-300 bg-white px-3 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-100"
+                >
+                  {meetUrl ? "Update link" : "Save link"}
+                </button>
+                <span className="text-xs text-indigo-400">or</span>
                 <button
                   type="button"
                   onClick={createMeet}
                   disabled={scheduling}
                   className="rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-60"
                 >
-                  {scheduling ? "Creating…" : "Create Google Meet & send invites"}
+                  {scheduling
+                    ? "Working…"
+                    : meetUrl
+                      ? "Email calendar invites"
+                      : "Create Google Meet & invite"}
                 </button>
-              )
-            )}
-            {isOwner && (
-              <button
-                type="button"
-                onClick={clearFinalized}
-                className="rounded-md border border-indigo-300 bg-white px-3 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-100"
-              >
-                Clear
-              </button>
-            )}
-          </div>
+              </div>
+              {error && <p className="mt-2 text-xs text-red-600">{error}</p>}
+            </>
+          )}
         </div>
       )}
 
