@@ -419,6 +419,7 @@ export function SchedulerClient({
             )}
           </div>
 
+          {isLoggedIn && (
           <div className="rounded-xl border border-slate-200 bg-white p-4">
             <h2 className="font-semibold text-slate-900">Your Google Calendar</h2>
             {googleStatus === "connected" ? (
@@ -459,6 +460,7 @@ export function SchedulerClient({
               </div>
             )}
           </div>
+          )}
 
           <SuggestedTimes windows={suggestions} displayTz={displayTz} nameById={nameById} />
           <ParticipantList responses={responses} myParticipantId={myPid} />
