@@ -151,17 +151,31 @@ export function SchedulerClient({
         setMyBlocks(blocksToEditable(mine.blocks));
         if (mine.display_name && !currentUserName) setName(mine.display_name);
         setStarted(true);
-        // Open on the week of the first block they marked.
-        if (mine.blocks[0]) {
-          const first = DateTime.fromISO(mine.blocks[0].start, {
-            zone: ev.organizer_timezone,
-          }).toISODate();
-          if (first) setWeekStart(startOfWeekISO(first));
-        }
       }
+    }
+
+    // Open on a week that actually has availability so something is visible:
+    // prefer my first block, otherwise the earliest block anyone marked.
+    const myFirst = pid
+      ? initialResponses.find((r) => r.participant_id === pid)?.blocks[0]?.start
+      : undefined;
+    const allStarts = initialResponses
+      .flatMap((r) => r.blocks.map((b) => b.start))
+      .sort();
+    const anchor = myFirst ?? allStarts[0];
+    if (anchor) {
+      const iso = DateTime.fromISO(anchor, { zone: ev.organizer_timezone }).toISODate();
+      if (iso) setWeekStart(startOfWeekISO(iso));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  function jumpToParticipant(p: ParticipantResponse) {
+    const first = [...p.blocks.map((b) => b.start)].sort()[0];
+    if (!first) return;
+    const iso = DateTime.fromISO(first, { zone: ev.organizer_timezone }).toISODate();
+    if (iso) setWeekStart(startOfWeekISO(iso));
+  }
 
   const meActive = isLoggedIn || started || !!myPid;
   const editable = meActive && name.trim().length > 0;
@@ -741,6 +755,7 @@ export function SchedulerClient({
             responses={responses}
             myParticipantId={myPid}
             colorById={colorById}
+            onJump={jumpToParticipant}
           />
 
           <div className="rounded-xl border border-slate-200 bg-white p-4">
