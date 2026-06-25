@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { signup } from "@/lib/auth-actions";
 import { createClient } from "@/lib/supabase/server";
+import { SubmitButton } from "@/components/SubmitButton";
 
 export default async function SignupPage({
   searchParams,
@@ -80,12 +81,12 @@ export default async function SignupPage({
           />
           <p className="mt-1 text-xs text-slate-400">At least 6 characters.</p>
         </div>
-        <button
-          type="submit"
-          className="w-full rounded-lg bg-indigo-600 px-4 py-2.5 font-medium text-white hover:bg-indigo-700"
+        <SubmitButton
+          pendingText="Creating account…"
+          className="w-full rounded-lg bg-indigo-600 px-4 py-2.5 font-medium text-white hover:bg-indigo-700 disabled:opacity-60"
         >
           Create account
-        </button>
+        </SubmitButton>
       </form>
 
       <p className="mt-6 text-center text-sm text-slate-600">

@@ -13,15 +13,14 @@ import {
   formatTime,
 } from "@/lib/time";
 
-/** An availability block being edited, in UTC epoch ms, anchored to a column. */
+/** An availability block being edited, as a UTC epoch-ms interval. */
 export interface EditBlock {
   id: string;
-  colIndex: number;
   startMs: number;
   endMs: number;
 }
 
-const HOUR_PX = 52;
+const HOUR_PX = 44;
 
 interface DragState {
   kind: "create" | "move" | "resize-top" | "resize-bottom";
@@ -29,18 +28,20 @@ interface DragState {
   rectTop: number;
   rectH: number;
   blockId: string;
-  anchorMs: number; // create: fixed anchor; move: grab offset from start
+  anchorMs: number; // create: fixed anchor; move: grab offset from block start
 }
 
 interface Props {
   ev: EventConfig;
   columns: GridColumn[];
   displayTz: string;
+  refDateISO: string;
   overlap: OverlapSegment[];
   maxCount: number;
   myBlocks: EditBlock[];
   setMyBlocks: (updater: (prev: EditBlock[]) => EditBlock[]) => void;
   editable: boolean;
+  scrollToMinute?: number;
 }
 
 function segColor(count: number, maxCount: number): string {
@@ -49,39 +50,48 @@ function segColor(count: number, maxCount: number): string {
   return `rgba(16,185,129,${op})`; // emerald-500
 }
 
+function newId(seed: number): string {
+  return typeof crypto !== "undefined" && crypto.randomUUID
+    ? crypto.randomUUID()
+    : `tmp-${seed}`;
+}
+
 export function WeekGrid({
   ev,
   columns,
   displayTz,
+  refDateISO,
   overlap,
   maxCount,
   myBlocks,
   setMyBlocks,
   editable,
+  scrollToMinute = 480,
 }: Props) {
   const windowMin = ev.day_end_minute - ev.day_start_minute;
   const H = (windowMin / 60) * HOUR_PX;
   const minLenMs = ev.snap_minutes * 60_000;
-  const ticks = timeAxisTicks(ev, displayTz);
+  const ticks = timeAxisTicks(ev, displayTz, refDateISO);
 
-  // Mutable drag state — no re-render needed while dragging.
   const dragRef = useRef<DragState | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
 
-  const pointerMsFor = useCallback(
-    (d: DragState, clientY: number): number => {
-      const col = columns[d.colIndex];
-      const frac = (clientY - d.rectTop) / d.rectH;
-      return snapMs(fracToMs(frac, col), col, ev.snap_minutes);
-    },
-    [columns, ev.snap_minutes],
-  );
+  // Default the vertical scroll to a daytime hour.
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = ((scrollToMinute - ev.day_start_minute) / windowMin) * H;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const onMove = useCallback(
     (clientY: number) => {
       const d = dragRef.current;
       if (!d) return;
       const col = columns[d.colIndex];
-      const ms = pointerMsFor(d, clientY);
+      if (!col) return;
+      const frac = (clientY - d.rectTop) / d.rectH;
+      const ms = snapMs(fracToMs(frac, col), col, ev.snap_minutes);
 
       setMyBlocks((prev) =>
         prev.map((b) => {
@@ -95,7 +105,6 @@ export function WeekGrid({
           if (d.kind === "resize-bottom") {
             return { ...b, endMs: Math.max(ms, b.startMs + minLenMs) };
           }
-          // move: keep length, clamp inside the column
           const len = b.endMs - b.startMs;
           let start = ms - d.anchorMs;
           start = Math.min(Math.max(start, col.startMs), col.endMs - len);
@@ -103,19 +112,18 @@ export function WeekGrid({
         }),
       );
     },
-    [columns, dragRef, minLenMs, pointerMsFor, setMyBlocks],
+    [columns, ev.snap_minutes, minLenMs, setMyBlocks],
   );
 
   const onUp = useCallback(() => {
     const d = dragRef.current;
     dragRef.current = null;
     if (d?.kind === "create") {
-      // Drop blocks that are too small to be meaningful (a plain click).
       setMyBlocks((prev) =>
         prev.filter((b) => b.id !== d.blockId || b.endMs - b.startMs >= minLenMs),
       );
     }
-  }, [dragRef, minLenMs, setMyBlocks]);
+  }, [minLenMs, setMyBlocks]);
 
   useEffect(() => {
     const move = (e: PointerEvent) => onMove(e.clientY);
@@ -139,15 +147,8 @@ export function WeekGrid({
     if (!editable) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const col = columns[colIndex];
-    const start = snapMs(
-      fracToMs((e.clientY - rect.top) / rect.height, col),
-      col,
-      ev.snap_minutes,
-    );
-    const id =
-      typeof crypto !== "undefined" && crypto.randomUUID
-        ? crypto.randomUUID()
-        : `tmp-${Date.now()}-${Math.round(start)}`;
+    const start = snapMs(fracToMs((e.clientY - rect.top) / rect.height, col), col, ev.snap_minutes);
+    const id = newId(start);
     dragRef.current = {
       kind: "create",
       colIndex,
@@ -156,25 +157,21 @@ export function WeekGrid({
       blockId: id,
       anchorMs: start,
     };
-    setMyBlocks((prev) => [...prev, { id, colIndex, startMs: start, endMs: start }]);
+    setMyBlocks((prev) => [...prev, { id, startMs: start, endMs: start }]);
     e.preventDefault();
   }
 
-  function beginMove(block: EditBlock, e: React.PointerEvent) {
+  function beginMove(block: EditBlock, colIndex: number, e: React.PointerEvent) {
     if (!editable) return;
     e.stopPropagation();
     e.preventDefault();
     const rect = colRectFrom(e.currentTarget);
     if (!rect) return;
-    const col = columns[block.colIndex];
-    const ms = snapMs(
-      fracToMs((e.clientY - rect.top) / rect.height, col),
-      col,
-      ev.snap_minutes,
-    );
+    const col = columns[colIndex];
+    const ms = snapMs(fracToMs((e.clientY - rect.top) / rect.height, col), col, ev.snap_minutes);
     dragRef.current = {
       kind: "move",
-      colIndex: block.colIndex,
+      colIndex,
       rectTop: rect.top,
       rectH: rect.height,
       blockId: block.id,
@@ -184,6 +181,7 @@ export function WeekGrid({
 
   function beginResize(
     block: EditBlock,
+    colIndex: number,
     edge: "resize-top" | "resize-bottom",
     e: React.PointerEvent,
   ) {
@@ -194,7 +192,7 @@ export function WeekGrid({
     if (!rect) return;
     dragRef.current = {
       kind: edge,
-      colIndex: block.colIndex,
+      colIndex,
       rectTop: rect.top,
       rectH: rect.height,
       blockId: block.id,
@@ -212,27 +210,22 @@ export function WeekGrid({
   return (
     <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
       <div style={{ minWidth: innerMinWidth }}>
-        {/* Header row */}
+        {/* Header row (stays visible above the vertical scroll) */}
         <div className="flex border-b border-slate-200 bg-slate-50">
           <div className="w-14 shrink-0" />
           {columns.map((col, i) => {
             const { weekday, day } = columnLabel(col, displayTz);
             return (
-              <div
-                key={i}
-                className="flex-1 border-l border-slate-200 py-2 text-center"
-              >
-                <div className="text-xs font-medium uppercase text-slate-400">
-                  {weekday}
-                </div>
+              <div key={i} className="flex-1 border-l border-slate-200 py-2 text-center">
+                <div className="text-xs font-medium uppercase text-slate-400">{weekday}</div>
                 <div className="text-sm font-semibold text-slate-700">{day}</div>
               </div>
             );
           })}
         </div>
 
-        {/* Body row */}
-        <div className="flex">
+        {/* Scrollable body */}
+        <div ref={scrollRef} className="flex overflow-y-auto" style={{ maxHeight: 560 }}>
           {/* Time axis */}
           <div className="relative w-14 shrink-0" style={{ height: H }}>
             {ticks.map((t, i) => (
@@ -257,7 +250,6 @@ export function WeekGrid({
               }`}
               style={{ height: H }}
             >
-              {/* Hour gridlines */}
               {ticks.map((t, i) => (
                 <div
                   key={i}
@@ -287,47 +279,47 @@ export function WeekGrid({
                 );
               })}
 
-              {/* My editable blocks */}
-              {myBlocks
-                .filter((b) => b.colIndex === ci)
-                .map((b) => {
-                  const top = ((b.startMs - col.startMs) / (col.endMs - col.startMs)) * H;
-                  const height = ((b.endMs - b.startMs) / (col.endMs - col.startMs)) * H;
-                  return (
-                    <div
-                      key={b.id}
-                      onPointerDown={(e) => beginMove(b, e)}
-                      className="absolute inset-x-0.5 rounded-md border border-indigo-500 bg-indigo-500/30 text-[10px] text-indigo-900 shadow-sm"
-                      style={{ top, height, cursor: editable ? "move" : "default" }}
-                    >
-                      {editable && (
-                        <>
-                          <div
-                            onPointerDown={(e) => beginResize(b, "resize-top", e)}
-                            className="absolute inset-x-0 top-0 h-2 cursor-ns-resize"
-                          />
-                          <div
-                            onPointerDown={(e) => beginResize(b, "resize-bottom", e)}
-                            className="absolute inset-x-0 bottom-0 h-2 cursor-ns-resize"
-                          />
-                          <button
-                            type="button"
-                            onPointerDown={(e) => deleteBlock(b.id, e)}
-                            className="absolute right-0.5 top-0.5 grid h-4 w-4 place-items-center rounded bg-white/80 text-indigo-700 hover:bg-white"
-                            aria-label="Remove block"
-                          >
-                            ×
-                          </button>
-                        </>
-                      )}
-                      {height > 22 && (
-                        <span className="pointer-events-none absolute left-1 top-0.5 font-medium">
-                          {formatTime(b.startMs, displayTz)}
-                        </span>
-                      )}
-                    </div>
-                  );
-                })}
+              {/* My editable blocks (each lives in exactly one day-column) */}
+              {myBlocks.map((b) => {
+                const clip = clipToColumn(b.startMs, b.endMs, col);
+                if (!clip) return null;
+                const top = clip.topFrac * H;
+                const height = Math.max((clip.bottomFrac - clip.topFrac) * H, 2);
+                return (
+                  <div
+                    key={b.id}
+                    onPointerDown={(e) => beginMove(b, ci, e)}
+                    className="absolute inset-x-0.5 rounded-md border border-indigo-500 bg-indigo-500/30 text-[10px] text-indigo-900 shadow-sm"
+                    style={{ top, height, cursor: editable ? "move" : "default" }}
+                  >
+                    {editable && (
+                      <>
+                        <div
+                          onPointerDown={(e) => beginResize(b, ci, "resize-top", e)}
+                          className="absolute inset-x-0 top-0 h-2 cursor-ns-resize"
+                        />
+                        <div
+                          onPointerDown={(e) => beginResize(b, ci, "resize-bottom", e)}
+                          className="absolute inset-x-0 bottom-0 h-2 cursor-ns-resize"
+                        />
+                        <button
+                          type="button"
+                          onPointerDown={(e) => deleteBlock(b.id, e)}
+                          className="absolute right-0.5 top-0.5 grid h-4 w-4 place-items-center rounded bg-white/80 text-indigo-700 hover:bg-white"
+                          aria-label="Remove block"
+                        >
+                          ×
+                        </button>
+                      </>
+                    )}
+                    {height > 22 && (
+                      <span className="pointer-events-none absolute left-1 top-0.5 font-medium">
+                        {formatTime(b.startMs, displayTz)}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           ))}
         </div>

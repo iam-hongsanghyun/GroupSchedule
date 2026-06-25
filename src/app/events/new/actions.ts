@@ -1,12 +1,8 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { DateTime } from "luxon";
 import { createClient } from "@/lib/supabase/server";
-
-function hhmmToMinutes(value: string): number {
-  const [h, m] = value.split(":").map((n) => parseInt(n, 10));
-  return (h || 0) * 60 + (m || 0);
-}
 
 export async function createEvent(formData: FormData) {
   const supabase = await createClient();
@@ -17,22 +13,20 @@ export async function createEvent(formData: FormData) {
 
   const title = String(formData.get("title") ?? "").trim();
   const description = String(formData.get("description") ?? "").trim() || null;
-  const start_date = String(formData.get("start_date") ?? "");
-  const end_date = String(formData.get("end_date") ?? "");
-  const day_start_minute = hhmmToMinutes(String(formData.get("day_start") ?? "09:00"));
-  const day_end_minute = hhmmToMinutes(String(formData.get("day_end") ?? "18:00"));
   const snap_minutes = Number(formData.get("snap_minutes") ?? 15);
   const meeting_duration_minutes = Number(formData.get("duration") ?? 60);
   const organizer_timezone = String(formData.get("timezone") ?? "UTC");
 
-  const fail = (msg: string) =>
-    redirect(`/events/new?error=${encodeURIComponent(msg)}`);
+  if (!title) {
+    redirect(`/events/new?error=${encodeURIComponent("Please give your request a title.")}`);
+  }
 
-  if (!title) fail("Please give your request a title.");
-  if (!start_date || !end_date) fail("Please choose a date range.");
-  if (end_date < start_date) fail("End date must be on or after the start date.");
-  if (day_end_minute <= day_start_minute)
-    fail("The daily end time must be after the start time.");
+  // No fixed date range or daily window: the calendar is freely navigable and
+  // spans the full day. We anchor the initial view to today in the organizer's
+  // timezone; availability can be added on any week.
+  const today =
+    DateTime.now().setZone(organizer_timezone).toISODate() ??
+    DateTime.now().toISODate()!;
 
   const { data, error } = await supabase
     .from("events")
@@ -40,10 +34,10 @@ export async function createEvent(formData: FormData) {
       owner_id: user.id,
       title,
       description,
-      start_date,
-      end_date,
-      day_start_minute,
-      day_end_minute,
+      start_date: today,
+      end_date: today,
+      day_start_minute: 0,
+      day_end_minute: 1440,
       snap_minutes,
       meeting_duration_minutes,
       organizer_timezone,
@@ -52,7 +46,9 @@ export async function createEvent(formData: FormData) {
     .single();
 
   if (error || !data) {
-    fail(error?.message ?? "Could not create the request.");
+    redirect(
+      `/events/new?error=${encodeURIComponent(error?.message ?? "Could not create the request.")}`,
+    );
   }
 
   redirect(`/e/${data!.share_slug}`);

@@ -53,13 +53,48 @@ export function instantMs(
     .toMillis();
 }
 
-/** Build the grid columns for an event. */
+/** Build the grid columns for an event's full date range (legacy/unused). */
 export function gridColumns(ev: EventConfig): GridColumn[] {
   return eventDates(ev).map((dateISO) => ({
     dateISO,
     startMs: instantMs(dateISO, ev.day_start_minute, ev.organizer_timezone),
     endMs: instantMs(dateISO, ev.day_end_minute, ev.organizer_timezone),
   }));
+}
+
+/** 'YYYY-MM-DD' of the Sunday that starts the week containing dateISO. */
+export function startOfWeekISO(dateISO: string): string {
+  const dt = DateTime.fromISO(dateISO);
+  const back = dt.weekday % 7; // Mon=1→1 … Sat=6→6, Sun=7→0
+  return dt.minus({ days: back }).toISODate()!;
+}
+
+/** Shift a 'YYYY-MM-DD' by a number of days. */
+export function addDaysISO(dateISO: string, days: number): string {
+  return DateTime.fromISO(dateISO).plus({ days }).toISODate()!;
+}
+
+/** Seven day-columns for the week starting at weekStartISO. */
+export function weekColumns(weekStartISO: string, ev: EventConfig): GridColumn[] {
+  const cols: GridColumn[] = [];
+  for (let i = 0; i < 7; i++) {
+    const dateISO = addDaysISO(weekStartISO, i);
+    cols.push({
+      dateISO,
+      startMs: instantMs(dateISO, ev.day_start_minute, ev.organizer_timezone),
+      endMs: instantMs(dateISO, ev.day_end_minute, ev.organizer_timezone),
+    });
+  }
+  return cols;
+}
+
+/** Human label for the viewed week (e.g. "June 2026" or "Jun – Jul 2026"). */
+export function weekLabel(weekStartISO: string): string {
+  const s = DateTime.fromISO(weekStartISO);
+  const e = s.plus({ days: 6 });
+  if (s.hasSame(e, "month")) return s.toFormat("LLLL yyyy");
+  if (s.hasSame(e, "year")) return `${s.toFormat("LLL")} – ${e.toFormat("LLL yyyy")}`;
+  return `${s.toFormat("LLL yyyy")} – ${e.toFormat("LLL yyyy")}`;
 }
 
 /** Total minutes in the daily window. */
@@ -103,10 +138,11 @@ export function fracToMs(frac: number, col: GridColumn): number {
 export function timeAxisTicks(
   ev: EventConfig,
   displayTz: string,
+  refDateISO?: string,
 ): { frac: number; label: string }[] {
   const ticks: { frac: number; label: string }[] = [];
   const win = windowMinutes(ev);
-  const refDate = ev.start_date;
+  const refDate = refDateISO ?? ev.start_date;
   // First hour boundary at or after day_start_minute.
   const firstHour = Math.ceil(ev.day_start_minute / 60) * 60;
   for (let m = firstHour; m <= ev.day_end_minute; m += 60) {

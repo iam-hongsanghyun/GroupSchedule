@@ -9,10 +9,11 @@ import { ParticipantList } from "@/components/ParticipantList";
 import { CopyButton } from "@/components/CopyButton";
 import { computeOverlap, suggestWindows } from "@/lib/scheduling";
 import {
-  type GridColumn,
-  gridColumns,
+  weekColumns,
+  startOfWeekISO,
+  addDaysISO,
+  weekLabel,
   localTimezone,
-  minuteLabel,
 } from "@/lib/time";
 import type { Block, EventConfig, ParticipantResponse } from "@/lib/types";
 
@@ -30,6 +31,12 @@ interface StoredResponse {
   name: string;
 }
 
+function newId(seed: number): string {
+  return typeof crypto !== "undefined" && crypto.randomUUID
+    ? crypto.randomUUID()
+    : `b-${seed}`;
+}
+
 function editableToBlocks(blocks: EditBlock[]): Block[] {
   return blocks.map((b) => ({
     start: new Date(b.startMs).toISOString(),
@@ -37,29 +44,14 @@ function editableToBlocks(blocks: EditBlock[]): Block[] {
   }));
 }
 
-function blocksToEditable(columns: GridColumn[], blocks: Block[]): EditBlock[] {
+function blocksToEditable(blocks: Block[]): EditBlock[] {
   return blocks
-    .map((b): EditBlock | null => {
-      const s = new Date(b.start).getTime();
-      const e = new Date(b.end).getTime();
-      let ci = columns.findIndex((c) => s >= c.startMs && s < c.endMs);
-      if (ci < 0) ci = columns.findIndex((c) => e > c.startMs && s < c.endMs);
-      if (ci < 0) return null;
-      const col = columns[ci];
-      const startMs = Math.max(s, col.startMs);
-      const endMs = Math.min(e, col.endMs);
-      if (endMs <= startMs) return null;
-      return {
-        id:
-          typeof crypto !== "undefined" && crypto.randomUUID
-            ? crypto.randomUUID()
-            : `b-${ci}-${startMs}`,
-        colIndex: ci,
-        startMs,
-        endMs,
-      };
-    })
-    .filter((b): b is EditBlock => b !== null);
+    .map((b, i): EditBlock => ({
+      id: newId(i),
+      startMs: new Date(b.start).getTime(),
+      endMs: new Date(b.end).getTime(),
+    }))
+    .filter((b) => b.endMs > b.startMs);
 }
 
 export function SchedulerClient({
@@ -70,7 +62,6 @@ export function SchedulerClient({
   myParticipantId,
 }: Props) {
   const supabase = useMemo(() => createClient(), []);
-  const columns = useMemo(() => gridColumns(ev), [ev]);
 
   const [responses, setResponses] = useState<ParticipantResponse[]>(initialResponses);
   const [myPid, setMyPid] = useState<string | null>(myParticipantId);
@@ -79,13 +70,14 @@ export function SchedulerClient({
   const [started, setStarted] = useState(isLoggedIn);
   const [myBlocks, setMyBlocks] = useState<EditBlock[]>([]);
   const [displayTz, setDisplayTz] = useState(ev.organizer_timezone);
+  const [weekStart, setWeekStart] = useState(() => startOfWeekISO(ev.start_date));
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const localTz = useMemo(() => localTimezone(), []);
+  const columns = useMemo(() => weekColumns(weekStart, ev), [weekStart, ev]);
 
-  // Resolve "my" response on mount: from the server (logged in) or localStorage (anon).
   useEffect(() => {
     setDisplayTz(localTimezone());
 
@@ -109,9 +101,16 @@ export function SchedulerClient({
     if (pid) {
       const mine = initialResponses.find((r) => r.participant_id === pid);
       if (mine) {
-        setMyBlocks(blocksToEditable(columns, mine.blocks));
+        setMyBlocks(blocksToEditable(mine.blocks));
         if (mine.display_name && !currentUserName) setName(mine.display_name);
         setStarted(true);
+        // Open on the week of the first block they marked.
+        if (mine.blocks[0]) {
+          const first = DateTime.fromISO(mine.blocks[0].start, {
+            zone: ev.organizer_timezone,
+          }).toISODate();
+          if (first) setWeekStart(startOfWeekISO(first));
+        }
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -120,7 +119,6 @@ export function SchedulerClient({
   const meActive = isLoggedIn || started || !!myPid;
   const editable = meActive && name.trim().length > 0;
 
-  // Effective responses: replace my saved entry with my live edits.
   const effective = useMemo<ParticipantResponse[]>(() => {
     const others = responses.filter((r) => r.participant_id !== (myPid ?? "__none__"));
     if (!meActive) return responses;
@@ -145,9 +143,7 @@ export function SchedulerClient({
   }, [effective]);
 
   const refresh = useCallback(async () => {
-    const { data } = await supabase.rpc("get_event_responses", {
-      p_slug: ev.share_slug,
-    });
+    const { data } = await supabase.rpc("get_event_responses", { p_slug: ev.share_slug });
     setResponses((data ?? []) as ParticipantResponse[]);
   }, [supabase, ev.share_slug]);
 
@@ -192,63 +188,68 @@ export function SchedulerClient({
     setSavedAt(Date.now());
   }
 
-  const dateRangeLabel = `${DateTime.fromISO(ev.start_date).toFormat(
-    "LLL d",
-  )} – ${DateTime.fromISO(ev.end_date).toFormat("LLL d, yyyy")}`;
-
+  const durationLabel =
+    ev.meeting_duration_minutes >= 60
+      ? `${ev.meeting_duration_minutes / 60}h`
+      : `${ev.meeting_duration_minutes}m`;
   const showTzToggle = localTz !== ev.organizer_timezone;
+  const navBtn =
+    "rounded-md border border-slate-300 bg-white px-2 py-1 text-sm text-slate-600 hover:bg-slate-50";
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-8">
       <header className="mb-5">
         <h1 className="text-2xl font-bold text-slate-900">{ev.title}</h1>
-        {ev.description && (
-          <p className="mt-1 text-slate-600">{ev.description}</p>
-        )}
+        {ev.description && <p className="mt-1 text-slate-600">{ev.description}</p>}
         <p className="mt-1 text-sm text-slate-500">
-          {dateRangeLabel} · {minuteLabel(ev.day_start_minute)}–
-          {minuteLabel(ev.day_end_minute)} · target{" "}
-          {ev.meeting_duration_minutes >= 60
-            ? `${ev.meeting_duration_minutes / 60}h`
-            : `${ev.meeting_duration_minutes}m`}{" "}
-          meeting
+          Target {durationLabel} meeting · drag the calendar to mark when you&apos;re free
         </p>
       </header>
 
       <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
         <div>
+          {/* Week navigation toolbar */}
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-4 text-xs text-slate-500">
-              <span className="flex items-center gap-1.5">
-                <span className="h-3 w-3 rounded-sm bg-indigo-500/40 ring-1 ring-indigo-500" />
-                Your availability
+            <div className="flex items-center gap-1">
+              <button type="button" onClick={() => setWeekStart(addDaysISO(weekStart, -28))} className={navBtn} aria-label="Previous month">
+                «
+              </button>
+              <button type="button" onClick={() => setWeekStart(addDaysISO(weekStart, -7))} className={navBtn} aria-label="Previous week">
+                ‹
+              </button>
+              <span className="min-w-[150px] text-center text-sm font-semibold text-slate-800">
+                {weekLabel(weekStart)}
               </span>
-              <span className="flex items-center gap-1.5">
-                <span className="h-3 w-3 rounded-sm bg-emerald-500/50" />
-                Everyone&apos;s overlap
-              </span>
+              <button type="button" onClick={() => setWeekStart(addDaysISO(weekStart, 7))} className={navBtn} aria-label="Next week">
+                ›
+              </button>
+              <button type="button" onClick={() => setWeekStart(addDaysISO(weekStart, 28))} className={navBtn} aria-label="Next month">
+                »
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  setWeekStart(startOfWeekISO(DateTime.now().toISODate()!))
+                }
+                className="ml-1 rounded-md border border-slate-300 bg-white px-2.5 py-1 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              >
+                Today
+              </button>
             </div>
+
             {showTzToggle && (
               <div className="flex rounded-lg border border-slate-300 p-0.5 text-xs">
                 <button
                   type="button"
                   onClick={() => setDisplayTz(localTz)}
-                  className={`rounded-md px-2.5 py-1 ${
-                    displayTz === localTz
-                      ? "bg-indigo-600 text-white"
-                      : "text-slate-600"
-                  }`}
+                  className={`rounded-md px-2.5 py-1 ${displayTz === localTz ? "bg-indigo-600 text-white" : "text-slate-600"}`}
                 >
                   My time
                 </button>
                 <button
                   type="button"
                   onClick={() => setDisplayTz(ev.organizer_timezone)}
-                  className={`rounded-md px-2.5 py-1 ${
-                    displayTz === ev.organizer_timezone
-                      ? "bg-indigo-600 text-white"
-                      : "text-slate-600"
-                  }`}
+                  className={`rounded-md px-2.5 py-1 ${displayTz === ev.organizer_timezone ? "bg-indigo-600 text-white" : "text-slate-600"}`}
                 >
                   Organizer
                 </button>
@@ -256,10 +257,22 @@ export function SchedulerClient({
             )}
           </div>
 
+          <div className="mb-2 flex items-center gap-4 text-xs text-slate-500">
+            <span className="flex items-center gap-1.5">
+              <span className="h-3 w-3 rounded-sm bg-indigo-500/40 ring-1 ring-indigo-500" />
+              Your availability
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="h-3 w-3 rounded-sm bg-emerald-500/50" />
+              Everyone&apos;s overlap
+            </span>
+          </div>
+
           <WeekGrid
             ev={ev}
             columns={columns}
             displayTz={displayTz}
+            refDateISO={weekStart}
             overlap={overlap}
             maxCount={effective.length || 1}
             myBlocks={myBlocks}
@@ -267,15 +280,15 @@ export function SchedulerClient({
             editable={editable}
           />
           <p className="mt-2 text-xs text-slate-400">
-            Times shown in <span className="font-medium">{displayTz}</span>.
+            Times in <span className="font-medium">{displayTz}</span>. Scroll the grid
+            for other hours; use ‹ › to change weeks.
             {editable
-              ? " Drag on the calendar to mark when you're free; drag edges to resize, the middle to move, × to delete."
+              ? " Drag to add availability; drag edges to resize, the middle to move, × to delete."
               : ""}
           </p>
         </div>
 
         <aside className="space-y-4">
-          {/* Availability editor / name gate */}
           <div className="rounded-xl border border-slate-200 bg-white p-4">
             <h2 className="font-semibold text-slate-900">Your availability</h2>
             {!meActive ? (
@@ -336,12 +349,7 @@ export function SchedulerClient({
             )}
           </div>
 
-          <SuggestedTimes
-            windows={suggestions}
-            displayTz={displayTz}
-            nameById={nameById}
-          />
-
+          <SuggestedTimes windows={suggestions} displayTz={displayTz} nameById={nameById} />
           <ParticipantList responses={responses} myParticipantId={myPid} />
 
           <div className="rounded-xl border border-slate-200 bg-white p-4">
